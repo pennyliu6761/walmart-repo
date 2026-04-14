@@ -1,7 +1,7 @@
 """
 基於梯度提升之機率性分位數需求預測系統
 Probabilistic Demand Forecasting via Gradient Boosting Quantile Regression
-國立金門大學 工業工程與管理學系 2026 畢業專題
+國立金門大學 工業工程與管理學系 畢業專題
 """
 
 import streamlit as st
@@ -86,93 +86,43 @@ BASE_LAYOUT = dict(
 # ════════════════════════════════════════
 # 資料生成（Demo / 真實 predictions.csv）
 # ════════════════════════════════════════
-@st.cache_data
+# ════════════════════════════════════════
+# 資料載入
+# ════════════════════════════════════════
+@st.cache_data(show_spinner=False)
 def load_data():
     try:
         df = pd.read_csv("data/predictions.csv", parse_dates=["Date"])
-        return df, False
+        return df
     except FileNotFoundError:
-        return _make_demo(), True
+        return None
 
-def _make_demo():
-    """
-    產生完整 Demo 資料：45 分店 × 32 部門（對應真實 Walmart 結構）
-    - X 類（12 部門）：食品、雜貨等平穩需求
-    - Y 類（12 部門）：服飾、家居等中等波動
-    - Z 類（8 部門）：節慶禮品等尖峰需求
-    LightGBM-Q 預測品質優於 STL+HW，符合研究結論方向。
-    """
-    np.random.seed(42)
-    DEPT_XYZ = {
-        2:("X",35000,.15), 3:("X",28000,.18), 4:("X",25000,.17),
-        6:("X",22000,.19), 7:("X",20000,.16), 10:("X",18000,.20),
-        12:("X",32000,.14),14:("X",15000,.21),16:("X",13000,.18),
-        38:("X",40000,.13),40:("X",45000,.12),46:("X",22000,.19),
-        1:("Y",28000,.32), 8:("Y",18000,.35), 11:("Y",16000,.38),
-        17:("Y",14000,.33),22:("Y",12000,.37),24:("Y",10000,.40),
-        25:("Y",9000, .36),26:("Y",11000,.39),31:("Y",8000, .34),
-        33:("Y",7500, .41),34:("Y",7000, .38),36:("Y",6500, .43),
-        18:("Z",8000, .65),56:("Z",6000, .72),60:("Z",5500, .68),
-        72:("Z",50000,.55),74:("Z",45000,.52),92:("Z",40000,.58),
-        93:("Z",38000,.61),95:("Z",35000,.54),
-    }
-    from datetime import date, timedelta
-    start, end = date(2011,11,4), date(2012,10,26)
-    dates = []
-    d = start
-    while d <= end:
-        dates.append(pd.Timestamp(d)); d += timedelta(weeks=1)
-    hol = set()
-    for yr in [2011,2012]:
-        for mo,dy in [(11,18),(11,25),(12,16),(12,23),(2,3),(9,2)]:
-            try: hol.add(pd.Timestamp(date(yr,mo,dy)))
-            except: pass
-    store_scales = {}
-    for s in range(1,46):
-        if s<=5: store_scales[s]=np.random.uniform(1.3,1.8)
-        elif s<=20: store_scales[s]=np.random.uniform(0.9,1.3)
-        else: store_scales[s]=np.random.uniform(0.5,0.9)
-    HOL_MULT={"X":(1.3,1.6),"Y":(1.8,2.8),"Z":(4.0,6.5)}
-    rows=[]
-    for store in range(1,46):
-        sc=store_scales[store]
-        for dept,(xyz,base,cv) in DEPT_XYZ.items():
-            b=base*sc
-            hm=np.random.uniform(*HOL_MULT[xyz])
-            for dt in dates:
-                is_h=dt in hol; wk=dt.isocalendar()[1]; yr_i=dt.year-2011
-                act=(b*(1+0.02*yr_i)*(1+0.18*np.cos((wk-50)*2*np.pi/52))
-                      *(hm if is_h else 1.0)*max(0.05,np.random.normal(1.0,cv*0.5)))
-                p50l=max(act*np.random.normal(1.0,cv*0.22),100)
-                sp=cv*p50l*0.55*(1.8 if is_h else 1.0)
-                p50h=max(act*np.random.normal(1.0,cv*0.55),100)
-                sph=cv*p50h*0.52
-                rows.append({"Store":store,"Dept":dept,"Date":dt,
-                    "Weekly_Sales":round(max(0,act),2),"IsHoliday":int(is_h),"XYZ":xyz,
-                    "P10_HW":round(max(p50h-sph,0),2),"P50_HW":round(p50h,2),"P90_HW":round(p50h+sph,2),
-                    "P10_LGBM":round(max(p50l-sp*0.8,0),2),"P50_LGBM":round(p50l,2),"P90_LGBM":round(p50l+sp*0.9,2)})
-    return pd.DataFrame(rows).sort_values(["Store","Dept","Date"]).reset_index(drop=True)
-
-# ════════════════════════════════════════
-# 指標函式
 # ════════════════════════════════════════
 def safe_mape(yt, yp, thr=100):
-    m = np.asarray(yt) >= thr
+    yt, yp = np.asarray(yt, dtype=float), np.asarray(yp, dtype=float)
+    m = (yt >= thr) & (yp > 0) & ~np.isnan(yp) & ~np.isnan(yt)
     if m.sum() == 0: return np.nan
-    return float(np.mean(np.abs((np.asarray(yt)[m]-np.asarray(yp)[m])/np.asarray(yt)[m])))
+    return float(np.mean(np.abs((yt[m]-yp[m])/yt[m])))
 
 def pinball(yt, yp, q):
     e = np.asarray(yt)-np.asarray(yp)
     return float(np.mean(np.where(e>=0,q*e,(q-1)*e)))
 
 def coverage(yt, lo, hi):
-    return float(np.mean((np.asarray(yt)>=np.asarray(lo))&(np.asarray(yt)<=np.asarray(hi))))
+    yt, lo, hi = np.asarray(yt,dtype=float), np.asarray(lo,dtype=float), np.asarray(hi,dtype=float)
+    valid = ~np.isnan(lo) & ~np.isnan(hi)
+    if valid.sum() == 0: return 0.0
+    return float(np.mean((yt[valid]>=lo[valid])&(yt[valid]<=hi[valid])))
 
 # ════════════════════════════════════════
 # 主程式
 # ════════════════════════════════════════
 def main():
-    df, is_demo = load_data()
+    df = load_data()
+    if df is None:
+        st.error("❌ 找不到 data/predictions.csv，請確認檔案已上傳。")
+        st.stop()
+    is_demo = df["Store"].nunique() < 40
     with st.sidebar:
         st.markdown("## 📦 需求預測系統")
         st.markdown("**國立金門大學**  \n工業工程與管理學系  \n2026 畢業專題")
@@ -214,10 +164,10 @@ def page_eda(df):
 
     # ── KPI（顯示真實研究數據，非 demo 計算值）──────
     # 真實資料規模固定展示，不從 demo 資料計算以免誤導
-    is_real = df["Store"].nunique() >= 40
-    total_b  = df["Weekly_Sales"].sum() / 1e9 if is_real else 6.96
-    n_stores = df["Store"].nunique() if is_real else 45
-    n_depts  = df["Dept"].nunique()  if is_real else 81
+    n_stores = df["Store"].nunique()
+    n_depts  = df["Dept"].nunique()
+    total_b  = df["Weekly_Sales"].sum() / 1e9
+    is_demo  = n_stores < 40
     hm        = df[df["IsHoliday"]==1]["Weekly_Sales"].mean()
     nhm       = df[df["IsHoliday"]==0]["Weekly_Sales"].mean()
     hol_mult  = hm/nhm if nhm > 0 else 1.07
@@ -236,8 +186,8 @@ def page_eda(df):
             <div class="metric-sub">{sub}</div>
         </div>""", unsafe_allow_html=True)
 
-    if not is_real:
-        st.info("ℹ️總銷售額為研究資料集實際數值（$6.96B），分店/部門數： 45店×81部門。")
+    if is_demo:
+        st.info("ℹ️ **Demo 模式**：目前載入模擬資料，圖表呈現趨勢分布。請將真實 `predictions.csv` 放入 `data/` 資料夾以還原完整 45店×81部門數據。")
 
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -246,8 +196,7 @@ def page_eda(df):
     ca, cb, cc = st.columns([2,2,2])
     with ca:
         all_stores = sorted(df["Store"].unique())
-        #default_s  = all_stores[:5] if len(all_stores)>=5 else all_stores
-        default_s  = all_stores
+        default_s  = all_stores[:5] if len(all_stores)>=5 else all_stores
         sel_s = st.multiselect("分店（可多選）", all_stores, default=default_s, key="e_s")
     with cb:
         sel_x = st.multiselect("XYZ 分群篩選", ["X","Y","Z"], default=["X","Y","Z"], key="e_x")
