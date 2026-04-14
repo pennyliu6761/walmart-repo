@@ -215,9 +215,9 @@ def page_eda(df):
     # ── KPI（顯示真實研究數據，非 demo 計算值）──────
     # 真實資料規模固定展示，不從 demo 資料計算以免誤導
     is_real = df["Store"].nunique() >= 40
-    total_b   = df["Weekly_Sales"].sum() / 1e9 if is_real else 6.96  # 真實約 $6.96B（訓練+測試）
-    n_stores  = df["Store"].nunique()
-    n_depts   = 81 if not is_real else df["Dept"].nunique()
+    total_b  = df["Weekly_Sales"].sum() / 1e9 if is_real else 6.96
+    n_stores = df["Store"].nunique() if is_real else 45
+    n_depts  = df["Dept"].nunique()  if is_real else 81
     hm        = df[df["IsHoliday"]==1]["Weekly_Sales"].mean()
     nhm       = df[df["IsHoliday"]==0]["Weekly_Sales"].mean()
     hol_mult  = hm/nhm if nhm > 0 else 1.07
@@ -308,6 +308,10 @@ def page_eda(df):
     with cr2:
         st.subheader("部門銷售排名")
         top_n = st.slider("顯示 Top N 部門", 5, 20, 12, key="e_topn")
+        actual_depts = df["Dept"].nunique()
+        if actual_depts < top_n:
+            st.caption(f"⚠️ 目前資料有 {actual_depts} 個部門（Demo 模式）。"
+                       f"載入真實 predictions.csv 可顯示完整 81 個部門排名。")
         da=df.groupby("Dept")["Weekly_Sales"].mean().sort_values(ascending=False).head(top_n)
         dm=da.mean()
         fig3=go.Figure(go.Bar(
