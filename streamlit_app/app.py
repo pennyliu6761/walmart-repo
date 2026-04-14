@@ -176,7 +176,7 @@ def main():
     # ── 側邊欄 ──────────────────────────
     with st.sidebar:
         st.markdown("## 📦 需求預測系統")
-        st.markdown("**國立金門大學**  \n工業工程與管理學系  \n2024 畢業專題")
+        st.markdown("**國立金門大學**  \n工業工程與管理學系  \n2026 畢業專題")
         if is_demo:
             st.info("⚡ Demo 資料模式\n\n將 `predictions.csv` 放入 `data/` 以載入真實預測結果。")
         st.divider()
@@ -1060,7 +1060,7 @@ def page_info():
 
     ---
 
-    *國立金門大學 工業工程與管理學系 ｜ 2024 畢業專題*
+    *國立金門大學 工業工程與管理學系 ｜ 2026 畢業專題*
     """)
 
 
