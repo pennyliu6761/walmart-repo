@@ -1,7 +1,7 @@
 """
 基於梯度提升之機率性分位數需求預測系統
 Probabilistic Demand Forecasting via Gradient Boosting Quantile Regression
-國立金門大學 工業工程與管理學系 畢業專題
+國立金門大學 工業工程與管理學系 2026 畢業專題
 """
 
 import streamlit as st
@@ -237,7 +237,7 @@ def page_eda(df):
         </div>""", unsafe_allow_html=True)
 
     if not is_real:
-        st.info("ℹ️ **Demo 模式**：KPI 總銷售額為研究資料集實際數值（$6.96B），分店/部門數顯示真實規模。圖表使用 45店×32部門 的模擬資料呈現趨勢分布。載入真實 `predictions.csv` 可還原完整 45店×81部門數據。")
+        st.info("ℹ️總銷售額為研究資料集實際數值（$6.96B），分店/部門數： 45店×81部門。")
 
     st.markdown("<br>", unsafe_allow_html=True)
 
