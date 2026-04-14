@@ -229,4 +229,4 @@ Streamlit Cloud 部署：[share.streamlit.io](https://share.streamlit.io) → Ne
 
 ---
 
-## [Streamlit UI 實作範例](https://walmart-capstone-wvpcnbdipthcsy6tk8tsbe.streamlit.app/)
+## [Streamlit UI 實作範例](https://walmart-repo-b88stfgkmunm5mcvd6czrr.streamlit.app/)
