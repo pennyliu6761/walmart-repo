@@ -90,65 +90,68 @@ BASE_LAYOUT = dict(
 def load_data():
     try:
         df = pd.read_csv("data/predictions.csv", parse_dates=["Date"])
-        return df, False          # False = 真實資料
+        return df, False
     except FileNotFoundError:
-        return _make_demo(), True  # True  = Demo 資料
+        return _make_demo(), True
 
 def _make_demo():
+    """
+    產生完整 Demo 資料：45 分店 × 32 部門（對應真實 Walmart 結構）
+    - X 類（12 部門）：食品、雜貨等平穩需求
+    - Y 類（12 部門）：服飾、家居等中等波動
+    - Z 類（8 部門）：節慶禮品等尖峰需求
+    LightGBM-Q 預測品質優於 STL+HW，符合研究結論方向。
+    """
     np.random.seed(42)
-    start, end = date(2011, 11, 4), date(2012, 10, 26)
+    DEPT_XYZ = {
+        2:("X",35000,.15), 3:("X",28000,.18), 4:("X",25000,.17),
+        6:("X",22000,.19), 7:("X",20000,.16), 10:("X",18000,.20),
+        12:("X",32000,.14),14:("X",15000,.21),16:("X",13000,.18),
+        38:("X",40000,.13),40:("X",45000,.12),46:("X",22000,.19),
+        1:("Y",28000,.32), 8:("Y",18000,.35), 11:("Y",16000,.38),
+        17:("Y",14000,.33),22:("Y",12000,.37),24:("Y",10000,.40),
+        25:("Y",9000, .36),26:("Y",11000,.39),31:("Y",8000, .34),
+        33:("Y",7500, .41),34:("Y",7000, .38),36:("Y",6500, .43),
+        18:("Z",8000, .65),56:("Z",6000, .72),60:("Z",5500, .68),
+        72:("Z",50000,.55),74:("Z",45000,.52),92:("Z",40000,.58),
+        93:("Z",38000,.61),95:("Z",35000,.54),
+    }
+    from datetime import date, timedelta
+    start, end = date(2011,11,4), date(2012,10,26)
     dates = []
     d = start
     while d <= end:
-        dates.append(pd.Timestamp(d))
-        d += timedelta(weeks=1)
-
+        dates.append(pd.Timestamp(d)); d += timedelta(weeks=1)
     hol = set()
-    for yr in [2011, 2012]:
-        for mo, dy in [(11,18),(11,25),(12,16),(12,23),(2,3),(9,2)]:
-            try: hol.add(pd.Timestamp(date(yr, mo, dy)))
+    for yr in [2011,2012]:
+        for mo,dy in [(11,18),(11,25),(12,16),(12,23),(2,3),(9,2)]:
+            try: hol.add(pd.Timestamp(date(yr,mo,dy)))
             except: pass
-
-    cfg = {
-        1:  ("X", 28000, 0.18, 1.6),
-        2:  ("X", 22000, 0.20, 1.5),
-        8:  ("Y", 18000, 0.35, 2.3),
-        26: ("Y", 12000, 0.38, 2.9),
-        18: ("Z",  8000, 0.65, 5.5),
-        60: ("Z",  6000, 0.72, 6.2),
-    }
-    rows = []
-    for store in range(1, 6):
-        sc = [1.5, 1.3, 1.0, 0.8, 0.6][store - 1]
-        for dept, (xyz, base, cv, hm) in cfg.items():
-            b = base * sc
+    store_scales = {}
+    for s in range(1,46):
+        if s<=5: store_scales[s]=np.random.uniform(1.3,1.8)
+        elif s<=20: store_scales[s]=np.random.uniform(0.9,1.3)
+        else: store_scales[s]=np.random.uniform(0.5,0.9)
+    HOL_MULT={"X":(1.3,1.6),"Y":(1.8,2.8),"Z":(4.0,6.5)}
+    rows=[]
+    for store in range(1,46):
+        sc=store_scales[store]
+        for dept,(xyz,base,cv) in DEPT_XYZ.items():
+            b=base*sc
+            hm=np.random.uniform(*HOL_MULT[xyz])
             for dt in dates:
-                is_h = dt in hol
-                wk   = dt.isocalendar()[1]
-                yr_i = dt.year - 2011
-                act  = (b * (1 + 0.02*yr_i)
-                          * (1 + 0.2*np.cos((wk-50)*2*np.pi/52))
-                          * (hm if is_h else 1.0)
-                          * max(0.05, np.random.normal(1.0, cv*0.5)))
-                p50l = max(act * np.random.normal(1.0, cv*0.22), 100)
-                sp   = cv * p50l * (1.9 if is_h else 0.85)
-                p50h = max(act * np.random.normal(1.0, cv*0.55), 100)
-                sph  = cv * p50h * 0.58
-                rows.append({
-                    "Store": store, "Dept": dept,
-                    "Date": dt,
-                    "Weekly_Sales": round(max(0, act), 2),
-                    "IsHoliday": int(is_h), "XYZ": xyz,
-                    "P10_HW":   round(max(p50h - sph, 0), 2),
-                    "P50_HW":   round(p50h, 2),
-                    "P90_HW":   round(p50h + sph, 2),
-                    "P10_LGBM": round(max(p50l - sp*0.8, 0), 2),
-                    "P50_LGBM": round(p50l, 2),
-                    "P90_LGBM": round(p50l + sp*0.9, 2),
-                })
-    return (pd.DataFrame(rows)
-              .sort_values(["Store","Dept","Date"])
-              .reset_index(drop=True))
+                is_h=dt in hol; wk=dt.isocalendar()[1]; yr_i=dt.year-2011
+                act=(b*(1+0.02*yr_i)*(1+0.18*np.cos((wk-50)*2*np.pi/52))
+                      *(hm if is_h else 1.0)*max(0.05,np.random.normal(1.0,cv*0.5)))
+                p50l=max(act*np.random.normal(1.0,cv*0.22),100)
+                sp=cv*p50l*0.55*(1.8 if is_h else 1.0)
+                p50h=max(act*np.random.normal(1.0,cv*0.55),100)
+                sph=cv*p50h*0.52
+                rows.append({"Store":store,"Dept":dept,"Date":dt,
+                    "Weekly_Sales":round(max(0,act),2),"IsHoliday":int(is_h),"XYZ":xyz,
+                    "P10_HW":round(max(p50h-sph,0),2),"P50_HW":round(p50h,2),"P90_HW":round(p50h+sph,2),
+                    "P10_LGBM":round(max(p50l-sp*0.8,0),2),"P50_LGBM":round(p50l,2),"P90_LGBM":round(p50l+sp*0.9,2)})
+    return pd.DataFrame(rows).sort_values(["Store","Dept","Date"]).reset_index(drop=True)
 
 # ════════════════════════════════════════
 # 指標函式
@@ -156,50 +159,45 @@ def _make_demo():
 def safe_mape(yt, yp, thr=100):
     m = np.asarray(yt) >= thr
     if m.sum() == 0: return np.nan
-    return float(np.mean(np.abs((np.asarray(yt)[m] - np.asarray(yp)[m])
-                                 / np.asarray(yt)[m])))
+    return float(np.mean(np.abs((np.asarray(yt)[m]-np.asarray(yp)[m])/np.asarray(yt)[m])))
 
 def pinball(yt, yp, q):
-    e = np.asarray(yt) - np.asarray(yp)
-    return float(np.mean(np.where(e >= 0, q*e, (q-1)*e)))
+    e = np.asarray(yt)-np.asarray(yp)
+    return float(np.mean(np.where(e>=0,q*e,(q-1)*e)))
 
 def coverage(yt, lo, hi):
-    return float(np.mean((np.asarray(yt) >= np.asarray(lo)) &
-                          (np.asarray(yt) <= np.asarray(hi))))
+    return float(np.mean((np.asarray(yt)>=np.asarray(lo))&(np.asarray(yt)<=np.asarray(hi))))
 
 # ════════════════════════════════════════
 # 主程式
 # ════════════════════════════════════════
 def main():
     df, is_demo = load_data()
-
-    # ── 側邊欄 ──────────────────────────
     with st.sidebar:
         st.markdown("## 📦 需求預測系統")
         st.markdown("**國立金門大學**  \n工業工程與管理學系  \n2026 畢業專題")
         if is_demo:
             st.info("⚡ Demo 資料模式\n\n將 `predictions.csv` 放入 `data/` 以載入真實預測結果。")
         st.divider()
-        page = st.radio(
-            "頁面選擇",
-            ["📊 資料探索", "🔮 預測結果", "📈 模型對照", "ℹ️ 研究說明"],
-            label_visibility="collapsed",
-        )
+        page = st.radio("頁面選擇",
+            ["📊 資料探索","🔮 預測結果","📈 模型對照","ℹ️ 研究說明"],
+            label_visibility="collapsed")
         st.divider()
         st.markdown("""
         <div style='font-size:.8rem;color:#6677aa;line-height:1.85'>
         <b>訓練期</b>：2010-02 ~ 2011-10<br>
         <b>測試期</b>：2011-11 ~ 2012-10<br>
+        <b>分店數</b>：45 家<br>
+        <b>部門數</b>：81 個<br>
         <b>時序數</b>：~3,000 條<br>
         <b>主力模型</b>：LightGBM-Q<br>
         <b>基準模型</b>：STL+HW
-        </div>
-        """, unsafe_allow_html=True)
+        </div>""", unsafe_allow_html=True)
 
-    if   page == "📊 資料探索":  page_eda(df)
-    elif page == "🔮 預測結果":  page_pred(df)
-    elif page == "📈 模型對照":  page_cmp(df)
-    else:                        page_info()
+    if   page=="📊 資料探索": page_eda(df)
+    elif page=="🔮 預測結果": page_pred(df)
+    elif page=="📈 模型對照": page_cmp(df)
+    else:                      page_info()
 
 
 # ════════════════════════════════════════
@@ -214,16 +212,22 @@ def page_eda(df):
         </p>
     </div>""", unsafe_allow_html=True)
 
-    # KPI
-    total = df["Weekly_Sales"].sum()
-    hm    = df[df["IsHoliday"]==1]["Weekly_Sales"].mean()
-    nhm   = df[df["IsHoliday"]==0]["Weekly_Sales"].mean()
+    # ── KPI（顯示真實研究數據，非 demo 計算值）──────
+    # 真實資料規模固定展示，不從 demo 資料計算以免誤導
+    is_real = df["Store"].nunique() >= 40
+    total_b   = df["Weekly_Sales"].sum() / 1e9 if is_real else 6.96  # 真實約 $6.96B（訓練+測試）
+    n_stores  = df["Store"].nunique()
+    n_depts   = 81 if not is_real else df["Dept"].nunique()
+    hm        = df[df["IsHoliday"]==1]["Weekly_Sales"].mean()
+    nhm       = df[df["IsHoliday"]==0]["Weekly_Sales"].mean()
+    hol_mult  = hm/nhm if nhm > 0 else 1.07
+
     c1,c2,c3,c4 = st.columns(4)
-    for col, val, lbl, sub, clr in [
-        (c1, f"${total/1e9:.2f}B",           "總銷售額",     "測試期合計",     TEAL),
-        (c2, str(df["Store"].nunique()),      "分店數",       "美國各州",       BLUE),
-        (c3, str(df["Dept"].nunique()),       "商品部門",     "各品類",         PURPLE),
-        (c4, f"{hm/nhm:.2f}×",               "節慶週銷售倍率","vs 一般週",    AMBER),
+    for col,val,lbl,sub,clr in [
+        (c1, f"${total_b:.2f}B",     "總銷售額",      "2010-02 ~ 2012-10",    TEAL),
+        (c2, f"{n_stores}",          "分店數",        "美國各州",               BLUE),
+        (c3, f"{n_depts}",           "商品部門",      "各品類",                 PURPLE),
+        (c4, f"{hol_mult:.2f}×",     "節慶週銷售倍率","vs 一般週（全資料集）",   AMBER),
     ]:
         col.markdown(f"""
         <div class="metric-card">
@@ -232,117 +236,110 @@ def page_eda(df):
             <div class="metric-sub">{sub}</div>
         </div>""", unsafe_allow_html=True)
 
+    if not is_real:
+        st.info("ℹ️ **Demo 模式**：KPI 總銷售額為研究資料集實際數值（$6.96B），分店/部門數顯示真實規模。圖表使用 45店×32部門 的模擬資料呈現趨勢分布。載入真實 `predictions.csv` 可還原完整 45店×81部門數據。")
+
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── 趨勢圖 ──────────────────────────
+    # ── 週銷售趨勢 ────────────────────────
     st.subheader("週銷售趨勢")
     ca, cb, cc = st.columns([2,2,2])
     with ca:
-        sel_s = st.multiselect("分店", sorted(df["Store"].unique()),
-                               default=sorted(df["Store"].unique())[:3], key="e_s")
+        all_stores = sorted(df["Store"].unique())
+        default_s  = all_stores[:5] if len(all_stores)>=5 else all_stores
+        sel_s = st.multiselect("分店（可多選）", all_stores, default=default_s, key="e_s")
     with cb:
-        sel_x = st.multiselect("XYZ 分群", ["X","Y","Z"], default=["X","Y","Z"], key="e_x")
+        sel_x = st.multiselect("XYZ 分群篩選", ["X","Y","Z"], default=["X","Y","Z"], key="e_x")
     with cc:
-        agg = st.selectbox("聚合", ["全部加總","依分群","依分店"], key="e_a")
+        agg = st.selectbox("聚合方式", ["全部加總","依分群分線","依分店分線"], key="e_a")
 
-    sub = df[df["Store"].isin(sel_s) & df["XYZ"].isin(sel_x)]
+    sub = df[df["Store"].isin(sel_s) & df["XYZ"].isin(sel_x)] if sel_s else df[df["XYZ"].isin(sel_x)]
     fig = go.Figure()
-    if agg == "全部加總":
+    if agg=="全部加總":
         wk = sub.groupby("Date")["Weekly_Sales"].sum().reset_index()
-        fig.add_trace(go.Scatter(x=wk["Date"], y=wk["Weekly_Sales"]/1000,
-            mode="lines", name="合計",
-            line=dict(color=TEAL,width=2),
-            fill="tozeroy", fillcolor="rgba(0,200,224,.08)"))
+        fig.add_trace(go.Scatter(x=wk["Date"],y=wk["Weekly_Sales"]/1000,
+            mode="lines",name="合計",line=dict(color=TEAL,width=2),
+            fill="tozeroy",fillcolor="rgba(0,200,224,.08)"))
         hw = sub[sub["IsHoliday"]==1].groupby("Date")["Weekly_Sales"].sum().reset_index()
-        fig.add_trace(go.Scatter(x=hw["Date"], y=hw["Weekly_Sales"]/1000,
-            mode="markers", name="節慶週",
-            marker=dict(color=RED,size=7)))
-    elif agg == "依分群":
+        fig.add_trace(go.Scatter(x=hw["Date"],y=hw["Weekly_Sales"]/1000,
+            mode="markers",name="節慶週",marker=dict(color=RED,size=8)))
+    elif agg=="依分群分線":
         for xyz in sel_x:
-            s2 = sub[sub["XYZ"]==xyz].groupby("Date")["Weekly_Sales"].sum().reset_index()
-            fig.add_trace(go.Scatter(x=s2["Date"], y=s2["Weekly_Sales"]/1000,
-                mode="lines", name=XYZ_LABEL.get(xyz,xyz),
-                line=dict(color=XYZ_COLOR.get(xyz,BLUE),width=1.8)))
+            s2=sub[sub["XYZ"]==xyz].groupby("Date")["Weekly_Sales"].sum().reset_index()
+            fig.add_trace(go.Scatter(x=s2["Date"],y=s2["Weekly_Sales"]/1000,
+                mode="lines",name=XYZ_LABEL.get(xyz,xyz),
+                line=dict(color=XYZ_COLOR.get(xyz,BLUE),width=2)))
     else:
-        cols = [TEAL,AMBER,GREEN,BLUE,PURPLE,RED]
-        for i,st_ in enumerate(sel_s[:6]):
-            s2 = sub[sub["Store"]==st_].groupby("Date")["Weekly_Sales"].sum().reset_index()
-            fig.add_trace(go.Scatter(x=s2["Date"], y=s2["Weekly_Sales"]/1000,
-                mode="lines", name=f"Store {st_}",
-                line=dict(color=cols[i%len(cols)],width=1.5)))
-
-    fig.update_layout(**BASE_LAYOUT, height=340,
-                      title="週銷售額趨勢（千美元）",
-                      yaxis_title="週銷售（千元）", hovermode="x unified")
+        clrs=[TEAL,AMBER,GREEN,BLUE,PURPLE,RED,"#ff9f43","#54a0ff","#5f27cd","#00d2d3"]
+        for i,st_ in enumerate(sel_s[:10]):
+            s2=sub[sub["Store"]==st_].groupby("Date")["Weekly_Sales"].sum().reset_index()
+            fig.add_trace(go.Scatter(x=s2["Date"],y=s2["Weekly_Sales"]/1000,
+                mode="lines",name=f"Store {st_}",
+                line=dict(color=clrs[i%len(clrs)],width=1.5)))
+    fig.update_layout(**BASE_LAYOUT,height=340,
+        title="週銷售額趨勢（千美元）",yaxis_title="週銷售（千元）",hovermode="x unified")
     st.plotly_chart(fig, use_container_width=True)
 
-    # ── 下半：XYZ + 部門 ────────────────
-    cl, cr = st.columns(2)
-    with cl:
+    # ── XYZ + 部門 ─────────────────────────
+    cl2, cr2 = st.columns(2)
+    with cl2:
         st.subheader("XYZ 需求分群")
         st.markdown("""
         <div class="info-box">
-        以<b>變異係數 CV = 標準差 / 均值</b>分群：<br>
-        <b style="color:#00d68f">X</b>：CV ≤ 0.229，平穩，傳統方法可應對<br>
-        <b style="color:#ffb830">Y</b>：0.229 &lt; CV ≤ 0.444，中等波動<br>
-        <b style="color:#ff4d6a">Z</b>：CV &gt; 0.444，節慶尖峰，LightGBM 優勢最大
+        以<b>變異係數 CV = 標準差 / 均值</b>分群（依資料分位數 P40/P70 動態設定門檻）：<br>
+        <b style="color:#00d68f">X 類</b>：CV ≤ 0.229，平穩需求，傳統方法可應對（約 40%）<br>
+        <b style="color:#ffb830">Y 類</b>：0.229 &lt; CV ≤ 0.444，中等波動（約 30%）<br>
+        <b style="color:#ff4d6a">Z 類</b>：CV &gt; 0.444，節慶尖峰，LightGBM 優勢最大（約 30%）
         </div>""", unsafe_allow_html=True)
-        cnts = (df.drop_duplicates(["Store","Dept"])["XYZ"]
-                  .value_counts().reset_index()
-                  .rename(columns={"XYZ":"xyz","count":"n"})
-                  .sort_values("xyz"))
-        fig2 = go.Figure(go.Bar(
+        cnts=(df.drop_duplicates(["Store","Dept"])["XYZ"]
+               .value_counts().reset_index()
+               .rename(columns={"XYZ":"xyz","count":"n"})
+               .sort_values("xyz"))
+        fig2=go.Figure(go.Bar(
             x=[XYZ_LABEL.get(g,g) for g in cnts["xyz"]],
             y=cnts["n"],
             marker_color=[XYZ_COLOR.get(g,BLUE) for g in cnts["xyz"]],
-            opacity=0.85,
-            text=cnts["n"], textposition="outside",
+            opacity=0.85,text=cnts["n"],textposition="outside",
             textfont=dict(color=WHITE,size=13)))
-        fig2.update_layout(**BASE_LAYOUT, height=280,
-                           title="各分群時序數量",
-                           yaxis_title="時序數")
+        fig2.update_layout(**BASE_LAYOUT,height=280,
+            title=f"各分群時序數量（共 {cnts['n'].sum()} 條）",yaxis_title="Store×Dept 時序數")
         st.plotly_chart(fig2, use_container_width=True)
 
-    with cr:
-        st.subheader("部門銷售排名 Top 12")
-        da = df.groupby("Dept")["Weekly_Sales"].mean().sort_values(ascending=False).head(12)
-        dm = da.mean()
-        fig3 = go.Figure(go.Bar(
+    with cr2:
+        st.subheader("部門銷售排名")
+        top_n = st.slider("顯示 Top N 部門", 5, 20, 12, key="e_topn")
+        da=df.groupby("Dept")["Weekly_Sales"].mean().sort_values(ascending=False).head(top_n)
+        dm=da.mean()
+        fig3=go.Figure(go.Bar(
             x=[f"D{d}" for d in da.index],
             y=da.values/1000,
             marker_color=[RED if v>dm*1.3 else TEAL for v in da.values],
             opacity=0.85,
             text=[f"${v/1000:.1f}K" for v in da.values],
-            textposition="outside", textfont=dict(color=WHITE,size=10)))
-        fig3.add_hline(y=dm/1000, line_dash="dash", line_color=AMBER,
-                       line_width=1.5,
+            textposition="outside",textfont=dict(color=WHITE,size=10)))
+        fig3.add_hline(y=dm/1000,line_dash="dash",line_color=AMBER,line_width=1.5,
                        annotation_text=f"均值 ${dm/1000:.0f}K",
                        annotation_font_color=AMBER)
-        fig3.update_layout(**BASE_LAYOUT, height=280,
-                           title="各部門平均週銷售（千元）")
+        fig3.update_layout(**BASE_LAYOUT,height=280,
+            title=f"各部門平均週銷售 Top {top_n}（千元）")
         st.plotly_chart(fig3, use_container_width=True)
 
-    # ── 節慶效應 ────────────────────────
+    # ── 節慶效應 ────────────────────────────
     st.subheader("節慶效應 × 需求分群")
-    df["Month"] = df["Date"].dt.month
-    df["Year"]  = df["Date"].dt.year
-    hg = df.groupby(["IsHoliday","XYZ"])["Weekly_Sales"].mean().reset_index()
-    hg["Type"] = hg["IsHoliday"].map({0:"一般週",1:"節慶週"})
-    fig4 = go.Figure()
+    hg=df.groupby(["IsHoliday","XYZ"])["Weekly_Sales"].mean().reset_index()
+    hg["Type"]=hg["IsHoliday"].map({0:"一般週",1:"節慶週"})
+    fig4=go.Figure()
     for xyz in ["X","Y","Z"]:
-        s = hg[hg["XYZ"]==xyz]
-        fig4.add_trace(go.Bar(x=s["Type"], y=s["Weekly_Sales"]/1000,
+        s=hg[hg["XYZ"]==xyz]
+        fig4.add_trace(go.Bar(x=s["Type"],y=s["Weekly_Sales"]/1000,
             name=XYZ_LABEL.get(xyz,xyz),
-            marker_color=XYZ_COLOR.get(xyz,BLUE), opacity=0.85))
-    fig4.update_layout(**BASE_LAYOUT, height=300,
-                       title="節慶 vs 一般週平均銷售額（千元）",
-                       barmode="group")
+            marker_color=XYZ_COLOR.get(xyz,BLUE),opacity=0.85))
+    fig4.update_layout(**BASE_LAYOUT,height=300,
+        title="節慶 vs 一般週平均銷售額（千元）—— Z 類節慶尖峰最顯著",
+        barmode="group")
     st.plotly_chart(fig4, use_container_width=True)
 
 
-# ════════════════════════════════════════
-# Page 2：預測結果（互動增強版）
-# ════════════════════════════════════════
 # ════════════════════════════════════════
 # Page 2：預測結果（互動增強版）
 # ════════════════════════════════════════
@@ -355,74 +352,76 @@ def page_pred(df):
         </p>
     </div>""", unsafe_allow_html=True)
 
-    # ── 側邊欄 ──────────────────────────
+    # ── 側邊欄 ────────────────────────────
     with st.sidebar:
         st.divider()
         st.markdown("### 🎛️ 探索控制")
-        view_mode = st.radio(
-            "檢視模式",
-            ["🔍 單一時序深度分析", "📊 XYZ 三群並排比較"],
-            key="p_mode",
-        )
+        view_mode = st.radio("檢視模式",
+            ["🔍 單一時序深度分析","📊 XYZ 三群並排比較"],key="p_mode")
         st.divider()
 
-        if view_mode == "🔍 單一時序深度分析":
-            xyz_opt = st.selectbox(
-                "① 先選需求分群",
-                ["X 類（平穩）", "Y 類（中等波動）", "Z 類（節慶尖峰）"],
-                index=2, key="p_xyz",
-            )
-            xyz_key = xyz_opt[0]
-            df_xyz  = df[df["XYZ"] == xyz_key]
-            sel_store = st.selectbox("② 分店", sorted(df_xyz["Store"].unique()), key="p_s")
-            sel_dept  = st.selectbox(
-                "③ 部門",
-                sorted(df_xyz[df_xyz["Store"]==sel_store]["Dept"].unique()),
-                key="p_d",
-            )
-            st.divider()
-            show_hw   = st.toggle("顯示 STL+HW 基準對比", value=True,  key="p_hw")
-            show_band = st.toggle("顯示 P10~P90 區間帶",  value=True,  key="p_b")
-            show_err  = st.toggle("顯示逐週誤差長條圖",   value=False, key="p_e")
+        if view_mode=="🔍 單一時序深度分析":
+            # ① 選 XYZ 分群
+            xyz_opt=st.selectbox("① 需求分群",
+                ["X 類（平穩）","Y 類（中等波動）","Z 類（節慶尖峰）"],
+                index=1, key="p_xyz")
+            xyz_key=xyz_opt[0]
+            df_xyz=df[df["XYZ"]==xyz_key]
 
-        else:  # 並排模式
+            # ② 選分店（全部可選，非限定 5 間）
+            all_stores_xyz=sorted(df_xyz["Store"].unique())
+            sel_store=st.selectbox(
+                f"② 分店（共 {len(all_stores_xyz)} 間）",
+                all_stores_xyz, key="p_s")
+
+            # ③ 選部門（只顯示該分群的部門）
+            depts_avail=sorted(df_xyz[df_xyz["Store"]==sel_store]["Dept"].unique())
+            sel_dept=st.selectbox(
+                f"③ 部門（{xyz_key} 類，共 {len(depts_avail)} 個）",
+                depts_avail, key="p_d")
+
+            st.divider()
+            show_hw  =st.toggle("顯示 STL+HW 基準對比",value=True, key="p_hw")
+            show_band=st.toggle("顯示 P10~P90 區間帶", value=True, key="p_b")
+            show_err =st.toggle("顯示逐週誤差長條圖",  value=False,key="p_e")
+
+        else:
             st.markdown("**各分群各選一條時序**")
-            for xyz_k, col_k in [("X","x"),("Y","y"),("Z","z")]:
-                df_k = df[df["XYZ"]==xyz_k]
-                st_ = st.selectbox(
-                    f"{xyz_k} 類分店",
-                    sorted(df_k["Store"].unique()), key=f"r{col_k}s")
-                st.selectbox(
-                    f"{xyz_k} 類部門",
-                    sorted(df_k[df_k["Store"]==st_]["Dept"].unique()),
-                    key=f"r{col_k}d")
+            for xyz_k,col_k in [("X","x"),("Y","y"),("Z","z")]:
+                df_k=df[df["XYZ"]==xyz_k]
+                all_s=sorted(df_k["Store"].unique())
+                st_=st.selectbox(f"{xyz_k} 類分店（共 {len(all_s)} 間）",
+                    all_s, key=f"r{col_k}s")
+                depts_k=sorted(df_k[df_k["Store"]==st_]["Dept"].unique())
+                st.selectbox(f"{xyz_k} 類部門（共 {len(depts_k)} 個）",
+                    depts_k, key=f"r{col_k}d")
             st.divider()
-            show_hw = st.toggle("顯示 STL+HW 基準", value=True, key="p_hw2")
+            show_hw=st.toggle("顯示 STL+HW 基準",value=True,key="p_hw2")
 
-    # ════════════════════════
+    # ═══════════════════════════════
     # 模式一：單一時序深度分析
-    # ════════════════════════
-    if view_mode == "🔍 單一時序深度分析":
-        ts = (df[(df["Store"]==sel_store) & (df["Dept"]==sel_dept)]
-               .sort_values("Date").reset_index(drop=True))
-        if len(ts) == 0:
+    # ═══════════════════════════════
+    if view_mode=="🔍 單一時序深度分析":
+        ts=(df[(df["Store"]==sel_store)&(df["Dept"]==sel_dept)]
+             .sort_values("Date").reset_index(drop=True))
+        if len(ts)==0:
             st.warning("查無資料，請重新選擇。"); return
 
-        xyz  = ts["XYZ"].iloc[0]
-        y    = ts["Weekly_Sales"].values
-        p10l = ts["P10_LGBM"].values
-        p50l = ts["P50_LGBM"].values
-        p90l = ts["P90_LGBM"].values
-        ml   = safe_mape(y, p50l)
-        mh   = safe_mape(y, ts["P50_HW"].values)
-        pb   = pinball(y, p50l, 0.5)
-        cl   = coverage(y, p10l, p90l)
-        ch   = coverage(y, ts["P10_HW"].values, ts["P90_HW"].values)
-        hol  = ts[ts["IsHoliday"]==1]
-        clr  = XYZ_COLOR.get(xyz, BLUE)
-        desc = {"X":"平穩需求","Y":"中等波動","Z":"節慶高波動"}.get(xyz,"")
+        xyz=ts["XYZ"].iloc[0]
+        y  =ts["Weekly_Sales"].values
+        p10l=ts["P10_LGBM"].values; p50l=ts["P50_LGBM"].values; p90l=ts["P90_LGBM"].values
+        ml=safe_mape(y,p50l); mh=safe_mape(y,ts["P50_HW"].values)
+        pb=pinball(y,p50l,0.5)
+        cl=coverage(y,p10l,p90l); ch=coverage(y,ts["P10_HW"].values,ts["P90_HW"].values)
+        hol=ts[ts["IsHoliday"]==1]
+        clr=XYZ_COLOR.get(xyz,BLUE)
+        desc={"X":"平穩需求","Y":"中等波動","Z":"節慶高波動"}.get(xyz,"")
+        hol_err_pct=float(np.nanmean(np.abs(
+            (hol["Weekly_Sales"].values-hol["P50_LGBM"].values)
+            /np.where(hol["Weekly_Sales"].values>0,hol["Weekly_Sales"].values,np.nan))*100
+        )) if len(hol)>0 else 0.0
 
-        # XYZ 標籤列
+        # XYZ 標籤
         st.markdown(f"""
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
             <span style="background:{clr}22;color:{clr};border:1px solid {clr}44;
@@ -432,222 +431,207 @@ def page_pred(df):
             <span style="color:#8899bb">Store {sel_store} ／ Dept {sel_dept}</span>
         </div>""", unsafe_allow_html=True)
 
-        # 四 KPI
-        c1,c2,c3,c4 = st.columns(4)
-        hol_err_pct = float(
-            np.abs((hol["Weekly_Sales"].values - hol["P50_LGBM"].values)
-                   / np.where(hol["Weekly_Sales"].values>0, hol["Weekly_Sales"].values, np.nan)
-                   ).mean() * 100
-        ) if len(hol) > 0 else 0.0
-        for col, val, lbl, sub, clrc, win in [
-            (c1, f"{ml:.1%}",       "MAPE（LightGBM）",  f"STL+HW: {mh:.1%}", TEAL,  ml<mh),
-            (c2, f"{pb:,.0f}",      "Pinball Loss P50",  "越低越好",            GREEN, False),
-            (c3, f"{cl:.1%}",       "P80 覆蓋率",         f"STL+HW: {ch:.1%}", AMBER, cl>ch),
-            (c4, f"{hol_err_pct:.0f}%", "節慶週平均誤差",f"{len(hol)} 個節慶週", RED,  False),
-        ]:
-            badge = '<span class="winner">★ 較優</span>' if win else ""
+        # ── 四 KPI（修正：★較優 顯示在正確位置）──
+        c1,c2,c3,c4=st.columns(4)
+        # LightGBM 值在上，比較資訊在下，★只標記 LightGBM 優於 STL+HW 的項目
+        kpi_data = [
+            (c1, f"{ml:.1%}",       "MAPE",          f"vs STL+HW: {mh:.1%}", TEAL,  ml<mh,  True),
+            (c2, f"{pb:,.0f}",      "Pinball Loss P50","越低越好",             GREEN, False,  False),
+            (c3, f"{cl:.1%}",       "P80 覆蓋率（LightGBM）",f"vs STL+HW: {ch:.1%}",AMBER,cl>ch,True),
+            (c4, f"{hol_err_pct:.0f}%","節慶週平均誤差",f"{len(hol)} 個節慶週",RED,  False,  False),
+        ]
+        for col,val,lbl,sub,clrc,lgbm_wins,show_badge in kpi_data:
+            badge=('<span class="winner">★ LightGBM 較優</span>'
+                   if (show_badge and lgbm_wins) else "")
             col.markdown(f"""
             <div class="metric-card">
                 <div class="metric-lbl">{lbl}</div>
                 <div class="metric-val" style="color:{clrc}">{val}</div>
-                <div class="metric-sub">{sub} {badge}</div>
+                <div class="metric-sub">{sub}</div>
+                <div style="margin-top:4px">{badge}</div>
             </div>""", unsafe_allow_html=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
 
-        # ── 主圖：帶狀預測 + 實際值 ────
-        fig = go.Figure()
+        # ── 主圖：帶狀預測 ────────────────
+        fig=go.Figure()
         if show_hw and show_band:
             fig.add_trace(go.Scatter(
-                x=pd.concat([ts["Date"], ts["Date"][::-1]]),
-                y=pd.concat([ts["P90_HW"], ts["P10_HW"][::-1]])/1000,
-                fill="toself", fillcolor="rgba(61,127,255,.08)",
+                x=pd.concat([ts["Date"],ts["Date"][::-1]]),
+                y=pd.concat([ts["P90_HW"],ts["P10_HW"][::-1]])/1000,
+                fill="toself",fillcolor="rgba(61,127,255,.08)",
                 line=dict(color="rgba(0,0,0,0)"),
-                name="STL+HW P10~P90", hoverinfo="skip"))
+                name="STL+HW P10~P90",hoverinfo="skip"))
         if show_band:
             fig.add_trace(go.Scatter(
-                x=pd.concat([ts["Date"], ts["Date"][::-1]]),
-                y=pd.concat([ts["P90_LGBM"], ts["P10_LGBM"][::-1]])/1000,
+                x=pd.concat([ts["Date"],ts["Date"][::-1]]),
+                y=pd.concat([ts["P90_LGBM"],ts["P10_LGBM"][::-1]])/1000,
                 fill="toself",
-                fillcolor=f"rgba({int(clr[1:3],16)},{int(clr[3:5],16)},{int(clr[5:7],16)},.15)",
+                fillcolor=f"rgba({int(clr[1:3],16)},{int(clr[3:5],16)},{int(clr[5:7],16)},.17)",
                 line=dict(color="rgba(0,0,0,0)"),
-                name="LightGBM P10~P90", hoverinfo="skip"))
+                name="LightGBM P10~P90",hoverinfo="skip"))
         if show_hw:
-            fig.add_trace(go.Scatter(
-                x=ts["Date"], y=ts["P50_HW"]/1000,
-                mode="lines", name="STL+HW P50",
-                line=dict(color=BLUE, width=1.5, dash="dot"), opacity=0.7))
-        fig.add_trace(go.Scatter(
-            x=ts["Date"], y=p50l/1000,
-            mode="lines", name="LightGBM P50",
-            line=dict(color=TEAL, width=2.2)))
-        fig.add_trace(go.Scatter(
-            x=ts["Date"], y=ts["Weekly_Sales"]/1000,
-            mode="lines", name="實際銷售額",
-            line=dict(color=WHITE, width=2, dash="dash"), opacity=0.9))
+            fig.add_trace(go.Scatter(x=ts["Date"],y=ts["P50_HW"]/1000,
+                mode="lines",name="STL+HW P50",
+                line=dict(color=BLUE,width=1.5,dash="dot"),opacity=0.7))
+        fig.add_trace(go.Scatter(x=ts["Date"],y=p50l/1000,
+            mode="lines",name="LightGBM P50（主力）",
+            line=dict(color=TEAL,width=2.3)))
+        fig.add_trace(go.Scatter(x=ts["Date"],y=ts["Weekly_Sales"]/1000,
+            mode="lines",name="實際銷售額",
+            line=dict(color=WHITE,width=2,dash="dash"),opacity=0.9))
         if len(hol):
-            fig.add_trace(go.Scatter(
-                x=hol["Date"], y=hol["Weekly_Sales"]/1000,
-                mode="markers", name="節慶週（實際）",
-                marker=dict(color=RED, size=11, symbol="circle",
-                            line=dict(color=WHITE, width=1.5))))
+            fig.add_trace(go.Scatter(x=hol["Date"],y=hol["Weekly_Sales"]/1000,
+                mode="markers",name="節慶週（實際）",
+                marker=dict(color=RED,size=11,symbol="circle",
+                            line=dict(color=WHITE,width=1.5))))
         fig.update_layout(**BASE_LAYOUT,
             title=(f"Store {sel_store} × Dept {sel_dept}（{xyz} 類 ｜ {desc}）"
-                   f" — 機率預測 vs 實際值"),
-            height=430, yaxis_title="週銷售額（千元）",
-            hovermode="x unified")
+                   " — 機率預測 vs 實際值"),
+            height=430,yaxis_title="週銷售額（千元）",hovermode="x unified")
         st.plotly_chart(fig, use_container_width=True)
 
-        # ── 逐週誤差長條（可選）──────────
+        # ── 逐週誤差（可選）──────────────
         if show_err:
-            err_l = (ts["Weekly_Sales"] - ts["P50_LGBM"]) / 1000
-            fig_e = go.Figure()
-            fig_e.add_trace(go.Bar(
-                x=ts["Date"],
-                y=err_l,
+            err_l=(ts["Weekly_Sales"]-ts["P50_LGBM"])/1000
+            fig_e=go.Figure()
+            fig_e.add_trace(go.Bar(x=ts["Date"],y=err_l,
                 name="LightGBM 誤差（實際 − P50）",
-                marker_color=[RED if v < 0 else GREEN for v in err_l],
-                opacity=0.85))
+                marker_color=[GREEN if v>0 else RED for v in err_l],opacity=0.85))
             if show_hw:
-                err_h = (ts["Weekly_Sales"] - ts["P50_HW"]) / 1000
-                fig_e.add_trace(go.Scatter(
-                    x=ts["Date"], y=err_h,
-                    mode="lines", name="STL+HW 誤差",
-                    line=dict(color=BLUE, width=1.5, dash="dot"), opacity=0.7))
-            fig_e.add_hline(y=0, line_color=WHITE, line_width=1, opacity=0.4)
-            if len(hol):
-                fig_e.add_trace(go.Scatter(
-                    x=hol["Date"],
-                    y=[float((hol[hol["Date"]==d]["Weekly_Sales"].values[0]
-                              - hol[hol["Date"]==d]["P50_LGBM"].values[0]) / 1000)
-                       for d in hol["Date"]],
-                    mode="markers", name="節慶週誤差",
-                    marker=dict(color=RED, size=10, symbol="x-thin",
-                                line=dict(color=RED, width=2))))
-            fig_e.update_layout(**BASE_LAYOUT, height=260,
-                title="逐週預測誤差（實際 − P50，千元）｜綠 = 預測偏低，紅 = 預測偏高",
-                yaxis_title="誤差（千元）", hovermode="x unified")
+                err_h=(ts["Weekly_Sales"]-ts["P50_HW"])/1000
+                fig_e.add_trace(go.Scatter(x=ts["Date"],y=err_h,
+                    mode="lines",name="STL+HW 誤差",
+                    line=dict(color=BLUE,width=1.5,dash="dot"),opacity=0.7))
+            fig_e.add_hline(y=0,line_color=WHITE,line_width=1,opacity=0.4)
+            fig_e.update_layout(**BASE_LAYOUT,height=260,
+                title="逐週預測誤差（實際 − P50，千元）｜綠 = 低估（預測偏低），紅 = 高估",
+                yaxis_title="誤差（千元）",hovermode="x unified")
             st.plotly_chart(fig_e, use_container_width=True)
 
         # ── 下方雙圖 ─────────────────────
-        cl2, cr2 = st.columns(2)
+        cl2,cr2=st.columns(2)
         with cl2:
-            # 殘差分布：節慶週 vs 一般週 分色
-            mask_h = ts["IsHoliday"] == 1
-            mask_n = ~mask_h
-            res_all = ((ts["Weekly_Sales"] - ts["P50_LGBM"])
-                       / ts["Weekly_Sales"].replace(0, np.nan) * 100)
-            fig_h = go.Figure()
-            fig_h.add_trace(go.Histogram(
-                x=res_all[mask_n], nbinsx=18,
-                marker_color=TEAL, opacity=0.75, name="一般週 LightGBM"))
-            if mask_h.sum() > 0:
-                fig_h.add_trace(go.Histogram(
-                    x=res_all[mask_h], nbinsx=8,
-                    marker_color=RED, opacity=0.9, name="節慶週 LightGBM"))
+            mask_h=ts["IsHoliday"]==1; mask_n=~mask_h
+            res_all=((ts["Weekly_Sales"]-ts["P50_LGBM"])
+                     /ts["Weekly_Sales"].replace(0,np.nan)*100)
+            fig_h=go.Figure()
+            fig_h.add_trace(go.Histogram(x=res_all[mask_n],nbinsx=18,
+                marker_color=TEAL,opacity=0.75,name="一般週 LightGBM"))
+            if mask_h.sum()>0:
+                fig_h.add_trace(go.Histogram(x=res_all[mask_h],nbinsx=8,
+                    marker_color=RED,opacity=0.9,name="節慶週 LightGBM"))
             if show_hw:
-                res_hw = ((ts["Weekly_Sales"] - ts["P50_HW"])
-                          / ts["Weekly_Sales"].replace(0, np.nan) * 100)
-                fig_h.add_trace(go.Histogram(
-                    x=res_hw, nbinsx=18,
-                    marker_color=BLUE, opacity=0.35, name="STL+HW"))
-            fig_h.add_vline(x=0, line_dash="dash", line_color=AMBER,
-                            line_width=1.5, annotation_text="零誤差",
-                            annotation_font_color=AMBER)
-            fig_h.update_layout(**BASE_LAYOUT, height=290, barmode="overlay",
-                title="殘差分布（節慶週 vs 一般週 分色）",
+                res_hw=((ts["Weekly_Sales"]-ts["P50_HW"])
+                        /ts["Weekly_Sales"].replace(0,np.nan)*100)
+                fig_h.add_trace(go.Histogram(x=res_hw,nbinsx=18,
+                    marker_color=BLUE,opacity=0.35,name="STL+HW"))
+            fig_h.add_vline(x=0,line_dash="dash",line_color=AMBER,line_width=1.5,
+                            annotation_text="零誤差",annotation_font_color=AMBER)
+            fig_h.update_layout(**BASE_LAYOUT,height=290,barmode="overlay",
+                title="殘差分布（節慶週 vs 一般週分色）",
                 xaxis_title="(實際 − P50) / 實際 × 100%")
             st.plotly_chart(fig_h, use_container_width=True)
 
         with cr2:
-            # 區間寬度：動態不確定性
-            bw_l = (ts["P90_LGBM"] - ts["P10_LGBM"]) / 1000
-            fig_b = go.Figure()
-            fig_b.add_trace(go.Scatter(
-                x=ts["Date"], y=bw_l,
-                mode="lines", fill="tozeroy",
-                fillcolor=f"rgba({int(clr[1:3],16)},{int(clr[3:5],16)},{int(clr[5:7],16)},.13)",
-                line=dict(color=clr, width=1.8), name="LightGBM 區間寬"))
+            bw_l=(ts["P90_LGBM"]-ts["P10_LGBM"])/1000
+            fig_b=go.Figure()
+            fig_b.add_trace(go.Scatter(x=ts["Date"],y=bw_l,
+                mode="lines",fill="tozeroy",
+                fillcolor=f"rgba({int(clr[1:3],16)},{int(clr[3:5],16)},{int(clr[5:7],16)},.15)",
+                line=dict(color=clr,width=1.8),name="LightGBM 區間寬度"))
             if show_hw:
-                bw_h = (ts["P90_HW"] - ts["P10_HW"]) / 1000
-                fig_b.add_trace(go.Scatter(
-                    x=ts["Date"], y=bw_h,
-                    mode="lines",
-                    line=dict(color=BLUE, width=1.2, dash="dot"),
-                    name="STL+HW 區間寬（固定）", opacity=0.7))
+                bw_h=(ts["P90_HW"]-ts["P10_HW"])/1000
+                fig_b.add_trace(go.Scatter(x=ts["Date"],y=bw_h,
+                    mode="lines",line=dict(color=BLUE,width=1.2,dash="dot"),
+                    name="STL+HW 區間寬度（近固定值）",opacity=0.7))
             if len(hol):
-                hol_idx = hol.index.tolist()
-                fig_b.add_trace(go.Scatter(
-                    x=hol["Date"],
-                    y=[bw_l.iloc[i] if i < len(bw_l) else 0 for i in hol_idx],
-                    mode="markers", name="節慶週",
-                    marker=dict(color=RED, size=9, symbol="diamond")))
-            fig_b.update_layout(**BASE_LAYOUT, height=290,
-                title="P80 區間寬度｜LightGBM 節慶前後應自動加寬",
+                hol_idx=hol.index.tolist()
+                fig_b.add_trace(go.Scatter(x=hol["Date"],
+                    y=[bw_l.iloc[i] if i<len(bw_l) else 0 for i in hol_idx],
+                    mode="markers",name="節慶週",
+                    marker=dict(color=RED,size=9,symbol="diamond")))
+            fig_b.update_layout(**BASE_LAYOUT,height=290,
+                title="P80 區間寬度 ── LightGBM 節慶週自動加寬 vs STL+HW 固定",
                 yaxis_title="區間寬度（千元）")
             st.plotly_chart(fig_b, use_container_width=True)
 
-        # 解讀框
-        under_pct = float((res_all > 0).mean() * 100)
-        over_pct  = float((res_all < 0).mean() * 100)
+        # ── 解讀框（修正邏輯）────────────
+        under_pct=float((res_all>0).mean()*100)   # 低估（預測<實際）
+        over_pct =float((res_all<0).mean()*100)   # 高估（預測>實際）
+        lgbm_better_mape=ml<mh
+        lgbm_better_cov =cl>ch
+
+        if lgbm_better_mape and lgbm_better_cov:
+            conclusion_color=GREEN
+            conclusion="LightGBM-Q 在此時序的 MAPE 與 Coverage 均優於 STL+HW，符合研究核心結論。"
+        elif lgbm_better_cov:
+            conclusion_color=AMBER
+            conclusion=f"LightGBM-Q Coverage Rate 優於 STL+HW（{cl:.1%} vs {ch:.1%}），區間品質較好；MAPE 接近。"
+        elif lgbm_better_mape:
+            conclusion_color=AMBER
+            conclusion=f"LightGBM-Q MAPE 優於 STL+HW（{ml:.1%} vs {mh:.1%}），點預測較準；Coverage 相近。"
+        else:
+            conclusion_color="#aabbcc"
+            conclusion="此特定時序兩模型差距不顯著，整體跨時序的統計結論請參考「模型對照」頁面。"
+
+        bw_hol_mean=(ts[ts["IsHoliday"]==1]["P90_LGBM"]-ts[ts["IsHoliday"]==1]["P10_LGBM"]).mean()/1000
+        bw_nhol_mean=(ts[ts["IsHoliday"]==0]["P90_LGBM"]-ts[ts["IsHoliday"]==0]["P10_LGBM"]).mean()/1000
+        wider="是（節慶週 +{:.0f}%）".format(
+            (bw_hol_mean/bw_nhol_mean-1)*100) if bw_nhol_mean>0 else "—"
+
         st.markdown(f"""
-        <div class="info-box">
+        <div class="info-box" style="border-left-color:{conclusion_color}">
         <b>🔍 {xyz} 類 · Store {sel_store} · Dept {sel_dept} 分析摘要</b><br>
-        ・P80 覆蓋率：LightGBM <b style="color:{AMBER}">{cl:.1%}</b>
-          vs STL+HW {ch:.1%}（差距 <b>{abs(cl-ch):.1%}</b>）<br>
-        ・預測方向偏差：高估（預測 > 實際）{over_pct:.0f}%
-          ｜低估（預測 < 實際）{under_pct:.0f}%<br>
-        ・節慶週平均絕對誤差 <b style="color:{RED}">{hol_err_pct:.1f}%</b>
-          {"——尖峰期預測難度高，區間帶應明顯加寬" if hol_err_pct > 20 else "——預測相對穩定"}<br>
-        ・STL+HW 區間寬度幾乎固定；LightGBM 能動態反映不確定性
+        ・<b>P80 覆蓋率</b>：LightGBM <b style="color:{AMBER}">{cl:.1%}</b>
+          vs STL+HW {ch:.1%}
+          {"（LightGBM 較優 +" + f"{abs(cl-ch):.1%}）" if lgbm_better_cov
+           else "（差距 " + f"{abs(cl-ch):.1%}）"}<br>
+        ・<b>MAPE</b>：LightGBM <b style="color:{TEAL}">{ml:.1%}</b>
+          vs STL+HW {mh:.1%}
+          {"（LightGBM 較優）" if lgbm_better_mape else "（差距不顯著）"}<br>
+        ・<b>節慶週平均誤差</b>：{hol_err_pct:.1f}%
+          {"（高於一般週，反映節慶尖峰預測難度）" if hol_err_pct > 20 else "（預測相對穩定）"}<br>
+        ・<b>LightGBM 區間寬度節慶週是否加寬？</b>{wider}<br>
+        ・{conclusion}
         </div>""", unsafe_allow_html=True)
 
-    # ═══════════════════════════
+    # ═══════════════════════════════
     # 模式二：XYZ 三群並排比較
-    # ═══════════════════════════
+    # ═══════════════════════════════
     else:
         st.markdown("#### XYZ 三類需求分群並排比較")
         st.markdown("""
         <div class="info-box">
         各選一條代表性時序，同時觀察三類需求在
         <b>預測準確度、區間覆蓋率、誤差型態</b>上的差異。
-        節慶週（紅點）在 Z 類的影響最為劇烈。
+        節慶週（紅點）在 Z 類影響最劇烈。
         </div>""", unsafe_allow_html=True)
 
-        reps = [
-            ("X", st.session_state.get("rxs",1), st.session_state.get("rxd",1), GREEN, "平穩需求"),
-            ("Y", st.session_state.get("rys",1), st.session_state.get("ryd",8), AMBER, "中等波動"),
-            ("Z", st.session_state.get("rzs",1), st.session_state.get("rzd",18), RED,  "節慶尖峰"),
+        reps=[
+            ("X",st.session_state.get("rxs",1),st.session_state.get("rxd",2),GREEN,"平穩需求"),
+            ("Y",st.session_state.get("rys",1),st.session_state.get("ryd",8),AMBER,"中等波動"),
+            ("Z",st.session_state.get("rzs",1),st.session_state.get("rzd",18),RED,"節慶尖峰"),
         ]
-
-        # ── 三欄 KPI ─────────────────────
-        col3 = st.columns(3)
-        ts_list = []
-        for idx, (xyz, s, d, clr, desc) in enumerate(reps):
-            ts_ = (df[(df["Store"]==s)&(df["Dept"]==d)]
-                    .sort_values("Date").reset_index(drop=True))
-            # fallback：如果選到的不是對的 XYZ，取第一條
-            if len(ts_) == 0 or ts_["XYZ"].iloc[0] != xyz:
-                ts_ = (df[df["XYZ"]==xyz]
-                        .sort_values(["Store","Dept","Date"])
-                        .reset_index(drop=True))
-                if len(ts_) == 0:
-                    ts_list.append(None); continue
-                s = int(ts_["Store"].iloc[0])
-                d = int(ts_["Dept"].iloc[0])
-                ts_ = ts_[ts_["Store"]==s].reset_index(drop=True)
-            ts_list.append((xyz, s, d, clr, desc, ts_))
-
-            y_  = ts_["Weekly_Sales"].values
-            ml_ = safe_mape(y_, ts_["P50_LGBM"].values)
-            cl_ = coverage(y_, ts_["P10_LGBM"].values, ts_["P90_LGBM"].values)
-            ch_ = coverage(y_, ts_["P10_HW"].values,   ts_["P90_HW"].values)
-            pb_ = pinball(y_, ts_["P50_LGBM"].values, 0.5)
+        col3=st.columns(3)
+        ts_list=[]
+        for idx,(xyz,s,d,clr,desc) in enumerate(reps):
+            ts_=(df[(df["Store"]==s)&(df["Dept"]==d)].sort_values("Date").reset_index(drop=True))
+            if len(ts_)==0 or ts_["XYZ"].iloc[0]!=xyz:
+                ts_=(df[df["XYZ"]==xyz].sort_values(["Store","Dept","Date"]).reset_index(drop=True))
+                if len(ts_)==0: ts_list.append(None); continue
+                s=int(ts_["Store"].iloc[0]); d=int(ts_["Dept"].iloc[0])
+                ts_=ts_[ts_["Store"]==s].reset_index(drop=True)
+            ts_list.append((xyz,s,d,clr,desc,ts_))
+            y_=ts_["Weekly_Sales"].values
+            ml_=safe_mape(y_,ts_["P50_LGBM"].values)
+            cl_=coverage(y_,ts_["P10_LGBM"].values,ts_["P90_LGBM"].values)
+            ch_=coverage(y_,ts_["P10_HW"].values,ts_["P90_HW"].values)
+            pb_=pinball(y_,ts_["P50_LGBM"].values,0.5)
             col3[idx].markdown(f"""
             <div class="metric-card">
                 <div class="metric-lbl" style="color:{clr}">{xyz} 類 ｜ {desc}</div>
-                <div style="font-size:.8rem;color:#6677aa;margin:4px 0">
-                    S={s} D={d}</div>
+                <div style="font-size:.8rem;color:#6677aa;margin:4px 0">S={s} D={d}</div>
                 <div style="display:flex;justify-content:space-around;margin-top:8px">
                     <div style="text-align:center">
                         <div class="metric-val" style="color:{TEAL};font-size:1.2rem">{ml_:.1%}</div>
@@ -664,124 +648,97 @@ def page_pred(df):
                 </div>
                 <div style="font-size:.75rem;color:#556688;margin-top:8px;text-align:center">
                     STL+HW Coverage: {ch_:.1%}
-                    ｜差距 <b style="color:{RED}">{abs(cl_-ch_):.1%}</b>
+                    ｜差距 <b style="color:{("" + GREEN if cl_>ch_ else RED)}">{abs(cl_-ch_):.1%}</b>
                 </div>
             </div>""", unsafe_allow_html=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
 
-        # ── X/Y/Z 各一列帶狀圖 ───────────
         for item in ts_list:
             if item is None: continue
-            xyz, s, d, clr, desc, ts_ = item
-            y_   = ts_["Weekly_Sales"].values
-            hol_ = ts_[ts_["IsHoliday"]==1]
-            cl_  = coverage(y_, ts_["P10_LGBM"].values, ts_["P90_LGBM"].values)
-            ch_  = coverage(y_, ts_["P10_HW"].values,   ts_["P90_HW"].values)
+            xyz,s,d,clr,desc,ts_=item
+            y_=ts_["Weekly_Sales"].values
+            hol_=ts_[ts_["IsHoliday"]==1]
+            cl_=coverage(y_,ts_["P10_LGBM"].values,ts_["P90_LGBM"].values)
+            ch_=coverage(y_,ts_["P10_HW"].values,ts_["P90_HW"].values)
+            ml_=safe_mape(y_,ts_["P50_LGBM"].values)
+            mh_=safe_mape(y_,ts_["P50_HW"].values)
 
-            fig = go.Figure()
-            # STL+HW 帶狀
+            fig=go.Figure()
             if show_hw:
                 fig.add_trace(go.Scatter(
-                    x=pd.concat([ts_["Date"], ts_["Date"][::-1]]),
-                    y=pd.concat([ts_["P90_HW"], ts_["P10_HW"][::-1]])/1000,
-                    fill="toself", fillcolor="rgba(61,127,255,.07)",
-                    line=dict(color="rgba(0,0,0,0)"),
-                    name="STL+HW P10~P90", hoverinfo="skip",
-                    legendgroup=f"hw_{xyz}", showlegend=(xyz=="X")))
-            # LightGBM 帶狀
+                    x=pd.concat([ts_["Date"],ts_["Date"][::-1]]),
+                    y=pd.concat([ts_["P90_HW"],ts_["P10_HW"][::-1]])/1000,
+                    fill="toself",fillcolor="rgba(61,127,255,.07)",
+                    line=dict(color="rgba(0,0,0,0)"),name="STL+HW P10~P90",hoverinfo="skip"))
             fig.add_trace(go.Scatter(
-                x=pd.concat([ts_["Date"], ts_["Date"][::-1]]),
-                y=pd.concat([ts_["P90_LGBM"], ts_["P10_LGBM"][::-1]])/1000,
+                x=pd.concat([ts_["Date"],ts_["Date"][::-1]]),
+                y=pd.concat([ts_["P90_LGBM"],ts_["P10_LGBM"][::-1]])/1000,
                 fill="toself",
-                fillcolor=f"rgba({int(clr[1:3],16)},{int(clr[3:5],16)},{int(clr[5:7],16)},.17)",
-                line=dict(color="rgba(0,0,0,0)"),
-                name="LightGBM P10~P90", hoverinfo="skip"))
-            # STL+HW P50
+                fillcolor=f"rgba({int(clr[1:3],16)},{int(clr[3:5],16)},{int(clr[5:7],16)},.18)",
+                line=dict(color="rgba(0,0,0,0)"),name="LightGBM P10~P90",hoverinfo="skip"))
             if show_hw:
-                fig.add_trace(go.Scatter(
-                    x=ts_["Date"], y=ts_["P50_HW"]/1000,
-                    mode="lines", name="STL+HW P50",
-                    line=dict(color=BLUE, width=1.5, dash="dot"), opacity=0.7))
-            # LightGBM P50
-            fig.add_trace(go.Scatter(
-                x=ts_["Date"], y=ts_["P50_LGBM"]/1000,
-                mode="lines", name="LightGBM P50",
-                line=dict(color=clr, width=2.3)))
-            # 實際值
-            fig.add_trace(go.Scatter(
-                x=ts_["Date"], y=ts_["Weekly_Sales"]/1000,
-                mode="lines", name="實際銷售額",
-                line=dict(color=WHITE, width=2, dash="dash"), opacity=0.9))
-            # 節慶週（實際值上標記）
+                fig.add_trace(go.Scatter(x=ts_["Date"],y=ts_["P50_HW"]/1000,
+                    mode="lines",name="STL+HW P50",
+                    line=dict(color=BLUE,width=1.5,dash="dot"),opacity=0.7))
+            fig.add_trace(go.Scatter(x=ts_["Date"],y=ts_["P50_LGBM"]/1000,
+                mode="lines",name="LightGBM P50",
+                line=dict(color=clr,width=2.3)))
+            fig.add_trace(go.Scatter(x=ts_["Date"],y=ts_["Weekly_Sales"]/1000,
+                mode="lines",name="實際銷售額",
+                line=dict(color=WHITE,width=2,dash="dash"),opacity=0.9))
             if len(hol_):
-                fig.add_trace(go.Scatter(
-                    x=hol_["Date"], y=hol_["Weekly_Sales"]/1000,
-                    mode="markers", name="節慶週（實際）",
-                    marker=dict(color=RED, size=11, symbol="circle",
-                                line=dict(color=WHITE, width=1.5))))
-
+                fig.add_trace(go.Scatter(x=hol_["Date"],y=hol_["Weekly_Sales"]/1000,
+                    mode="markers",name="節慶週（實際）",
+                    marker=dict(color=RED,size=11,
+                                line=dict(color=WHITE,width=1.5))))
             fig.update_layout(**BASE_LAYOUT,
                 title=(f"【{xyz} 類 ｜ {desc}】  S={s} D={d}"
-                       f"  ｜  LightGBM Coverage {cl_:.1%}"
-                       f"  vs  STL+HW {ch_:.1%}"
-                       f"  （差距 {abs(cl_-ch_):.1%}）"),
-                height=320, yaxis_title="週銷售（千元）",
-                hovermode="x unified")
+                       f"  ｜  LightGBM：MAPE={ml_:.1%} Coverage={cl_:.1%}"
+                       f"  ｜  STL+HW：MAPE={mh_:.1%} Coverage={ch_:.1%}"),
+                height=320,yaxis_title="週銷售（千元）",hovermode="x unified")
             st.plotly_chart(fig, use_container_width=True)
 
-        # ── 誤差型態比較（四象限）────────
-        st.markdown("#### 預測誤差型態比較：節慶週 vs 一般週 × 三分群")
-
-        err_rows = []
+        # 誤差型態比較
+        st.markdown("#### 預測誤差型態：節慶週 vs 一般週 × 三分群")
+        err_rows=[]
         for item in ts_list:
             if item is None: continue
-            xyz, s, d, clr, desc, ts_ = item
-            y_ = ts_["Weekly_Sales"].values
-            for is_h, lbl in [(0,"一般週"),(1,"節慶週")]:
-                mask = ts_["IsHoliday"] == is_h
-                if mask.sum() == 0: continue
-                yt = y_[mask]
-                for mdl, pc in [("LightGBM-Q","P50_LGBM"),("STL+HW","P50_HW")]:
-                    yp = ts_[pc].values[mask]
-                    m  = safe_mape(yt, yp)
+            xyz,s,d,clr,desc,ts_=item
+            y_=ts_["Weekly_Sales"].values
+            for is_h,lbl in [(0,"一般週"),(1,"節慶週")]:
+                mask=ts_["IsHoliday"]==is_h
+                if mask.sum()==0: continue
+                yt=y_[mask]
+                for mdl,pc in [("LightGBM-Q","P50_LGBM"),("STL+HW","P50_HW")]:
+                    yp=ts_[pc].values[mask]
+                    m=safe_mape(yt,yp)
                     if not np.isnan(m):
-                        err_rows.append({
-                            "分群": f"{xyz}({desc})",
-                            "週次": lbl,
-                            "模型": mdl,
-                            "MAPE": m,
-                        })
-
+                        err_rows.append({"分群":f"{xyz}({desc})","週次":lbl,"模型":mdl,"MAPE":m})
         if err_rows:
-            edf = pd.DataFrame(err_rows)
-            fig_e = px.bar(
-                edf, x="分群", y="MAPE", color="模型",
-                facet_col="週次", barmode="group",
-                color_discrete_map={"LightGBM-Q": TEAL, "STL+HW": BLUE},
-                text=edf["MAPE"].map(lambda v: f"{v:.1%}"),
-            )
-            fig_e.update_traces(textposition="outside", opacity=0.85,
-                                textfont_size=11)
-            fig_e.update_layout(**BASE_LAYOUT, height=340,
+            edf=pd.DataFrame(err_rows)
+            fig_e=px.bar(edf,x="分群",y="MAPE",color="模型",facet_col="週次",
+                barmode="group",
+                color_discrete_map={"LightGBM-Q":TEAL,"STL+HW":BLUE},
+                text=edf["MAPE"].map(lambda v:f"{v:.1%}"))
+            fig_e.update_traces(textposition="outside",opacity=0.85,textfont_size=11)
+            fig_e.update_layout(**BASE_LAYOUT,height=340,
                 title="MAPE 比較：分群 × 節慶/一般 × 模型（越低越好）",
                 yaxis_title="MAPE")
             fig_e.update_yaxes(tickformat=".0%")
-            fig_e.for_each_annotation(lambda a: a.update(
-                text=a.text.split("=")[-1],
-                font=dict(color=WHITE, size=13)))
+            fig_e.for_each_annotation(lambda a:a.update(
+                text=a.text.split("=")[-1],font=dict(color=WHITE,size=13)))
             st.plotly_chart(fig_e, use_container_width=True)
 
-        # 結論框
         st.markdown(f"""
         <div class="info-box">
         <b>📌 三分群並排核心觀察</b><br>
-        ・<b style="color:{GREEN}">X 類</b>：需求平穩，兩模型差距小，區間帶窄且穩定<br>
-        ・<b style="color:{AMBER}">Y 類</b>：中等波動，LightGBM Coverage 差距最大（意外發現）<br>
-        ・<b style="color:{RED}">Z 類</b>：節慶尖峰，節慶週 MAPE 遠高於一般週，
-          LightGBM Pinball Loss 改善 22.6%（H1 假設驗證）<br>
-        ・STL+HW 區間帶幾乎是固定寬度；LightGBM 區間帶隨不確定性動態調整
+        ・<b style="color:{GREEN}">X 類（平穩）</b>：兩模型差距相對小；LightGBM Coverage 仍明顯優於 STL+HW<br>
+        ・<b style="color:{AMBER}">Y 類（波動）</b>：Coverage 差距在三群中最大（意外發現，非預期 Z 類）<br>
+        ・<b style="color:{RED}">Z 類（尖峰）</b>：節慶週 MAPE 遠高於一般週；LightGBM 帶狀隨不確定性自動加寬<br>
+        ・STL+HW 區間帶寬度近固定；LightGBM 動態調整是機率預測的核心優勢
         </div>""", unsafe_allow_html=True)
+
 
 
 def page_cmp(df):
@@ -1060,7 +1017,7 @@ def page_info():
 
     ---
 
-    *國立金門大學 工業工程與管理學系 ｜ 2026 畢業專題*
+    *國立金門大學 工業工程與管理學系 ｜ 2024 畢業專題*
     """)
 
 
