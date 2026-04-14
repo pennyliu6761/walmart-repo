@@ -246,7 +246,8 @@ def page_eda(df):
     ca, cb, cc = st.columns([2,2,2])
     with ca:
         all_stores = sorted(df["Store"].unique())
-        default_s  = all_stores[:5] if len(all_stores)>=5 else all_stores
+        #default_s  = all_stores[:5] if len(all_stores)>=5 else all_stores
+        default_s  = all_stores
         sel_s = st.multiselect("分店（可多選）", all_stores, default=default_s, key="e_s")
     with cb:
         sel_x = st.multiselect("XYZ 分群篩選", ["X","Y","Z"], default=["X","Y","Z"], key="e_x")
